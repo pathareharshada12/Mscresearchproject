@@ -5,9 +5,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-# --------------------------------------------------
 # Page setup
-# --------------------------------------------------
 
 st.set_page_config(
     page_title="Human–AI Foresight",
@@ -16,9 +14,7 @@ st.set_page_config(
 )
 
 
-# --------------------------------------------------
 # File paths
-# --------------------------------------------------
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -71,9 +67,7 @@ REVIEWS_FOLDER.mkdir(
 )
 
 
-# --------------------------------------------------
-# Check required files
-# --------------------------------------------------
+# Check files
 
 required_files = {
     "Articles": ARTICLES_FILE,
@@ -109,9 +103,7 @@ if missing_files:
     st.stop()
 
 
-# --------------------------------------------------
 # Load data
-# --------------------------------------------------
 
 @st.cache_data
 def load_data():
@@ -161,9 +153,7 @@ def load_data():
 ) = load_data()
 
 
-# --------------------------------------------------
 # Session state
-# --------------------------------------------------
 
 defaults = {
 
@@ -186,9 +176,7 @@ for key, value in defaults.items():
         st.session_state[key] = value
 
 
-# --------------------------------------------------
 # Topic IDs
-# --------------------------------------------------
 
 topic_ids = sorted(
 
@@ -204,9 +192,7 @@ topic_ids = sorted(
 )
 
 
-# --------------------------------------------------
-# Helper functions
-# --------------------------------------------------
+# Functions
 
 def participant_file():
 
@@ -418,114 +404,8 @@ def clean_terms(summary):
     return useful_terms[:6]
 
 
-def evidence_cautions(
-    metric,
-    topic_articles
-):
 
-    cautions = []
-
-
-    source_concentration = float(
-        metric[
-            "source_concentration"
-        ]
-    )
-
-
-    growth = metric[
-        "growth_percent"
-    ]
-
-
-    if (
-        source_concentration
-        >= 0.30
-    ):
-
-        source_counts = (
-            topic_articles[
-                "source"
-            ]
-            .value_counts()
-        )
-
-
-        if not source_counts.empty:
-
-            top_source = (
-                source_counts
-                .idxmax()
-            )
-
-
-            cautions.append(
-
-                f"High source concentration "
-                f"around {top_source}."
-            )
-
-
-    if (
-        not pd.isna(growth)
-        and growth <= -40
-    ):
-
-        cautions.append(
-
-            "Recent coverage has "
-            "declined substantially."
-        )
-
-
-    titles = " ".join(
-
-        topic_articles[
-            "title"
-        ]
-
-        .fillna("")
-
-        .astype(str)
-
-        .tolist()
-
-    ).lower()
-
-
-    market_terms = [
-
-        "market size",
-        "market forecast",
-        "cagr",
-        "billion",
-        "market analysis"
-    ]
-
-
-    market_hits = sum(
-
-        term in titles
-
-        for term in market_terms
-    )
-
-
-    if market_hits >= 2:
-
-        cautions.append(
-
-            "This grouping is heavily influenced "
-            "by commercial market reports."
-        )
-
-
-    return cautions
-
-
-# ==================================================
-# INTRO
-# ==================================================
+# App introduction
 
 if not st.session_state.started:
 
@@ -672,16 +552,12 @@ if not st.session_state.started:
     st.stop()
 
 
-# ==================================================
-# LOAD SAVED RESPONSES
-# ==================================================
+# Saved responses
 
 saved = get_saved_reviews()
 
 
-# ==================================================
-# COMPLETION SCREEN
-# ==================================================
+# Final report
 
 if (
 
@@ -1001,9 +877,7 @@ if (
     st.stop()
 
 
-# ==================================================
-# DASHBOARD
-# ==================================================
+# Signal dashboard
 
 st.title(
     "Signal Dashboard"
@@ -1056,12 +930,6 @@ for index, topic_id in enumerate(
         )
 
 
-    cautions = evidence_cautions(
-        metric,
-        topic_articles
-    )
-
-
     column = dashboard_columns[
         index
         % len(dashboard_columns)
@@ -1090,25 +958,10 @@ for index, topic_id in enumerate(
         )
 
 
-        if cautions:
-
-            st.caption(
-                "⚠ Evidence caution"
-            )
-
-        else:
-
-            st.caption(
-                "No major automated caution"
-            )
-
-
 st.divider()
 
 
-# ==================================================
-# CURRENT SIGNAL
-# ==================================================
+# Current signal
 
 current_index = (
     st.session_state
@@ -1136,12 +989,6 @@ terms = clean_terms(
 )
 
 
-cautions = evidence_cautions(
-    metric,
-    topic_articles
-)
-
-
 progress = (
 
     current_index + 1
@@ -1163,9 +1010,7 @@ st.caption(
 )
 
 
-# ==================================================
-# SIGNAL VIEW
-# ==================================================
+# Signal evidence
 
 st.title(
     f"Possible Signal {current_index + 1}"
@@ -1185,9 +1030,7 @@ if terms:
     )
 
 
-# --------------------------------------------------
-# Evidence snapshot
-# --------------------------------------------------
+# Evidence metrics
 
 st.subheader(
     "Evidence snapshot"
@@ -1256,9 +1099,7 @@ col4.metric(
 )
 
 
-# --------------------------------------------------
-# Representative evidence
-# --------------------------------------------------
+# Representative articles
 
 st.subheader(
     "Representative evidence"
@@ -1346,39 +1187,8 @@ for _, row in topic_evidence.iterrows():
             )
 
 
-# --------------------------------------------------
-# Evidence quality
-# --------------------------------------------------
 
-st.subheader(
-    "Evidence quality"
-)
-
-
-if cautions:
-
-    for caution in cautions:
-
-        st.warning(
-            caution
-        )
-
-
-else:
-
-    st.success(
-        """
-        No major automated evidence-quality warning
-        was detected.
-
-        This does not mean the pattern is a valid signal.
-        """
-    )
-
-
-# --------------------------------------------------
-# Browse all
-# --------------------------------------------------
+# All articles
 
 with st.expander(
     f"Browse all {len(topic_articles)} items"
@@ -1404,9 +1214,7 @@ with st.expander(
         st.divider()
 
 
-# ==================================================
-# PROFESSIONAL JUDGEMENT
-# ==================================================
+# Human review
 
 st.divider()
 
@@ -1479,9 +1287,7 @@ additional_evidence = []
 evidence_notes = ""
 
 
-# --------------------------------------------------
-# Include
-# --------------------------------------------------
+# Include signal
 
 if (
     signal_decision
@@ -1567,9 +1373,7 @@ if (
     )
 
 
-# --------------------------------------------------
-# Exclude
-# --------------------------------------------------
+# Exclude signal
 
 elif (
     signal_decision
@@ -1595,9 +1399,7 @@ elif (
     )
 
 
-# --------------------------------------------------
-# Need more evidence
-# --------------------------------------------------
+# More evidence
 
 elif (
     signal_decision
@@ -1632,9 +1434,7 @@ elif (
     )
 
 
-# --------------------------------------------------
 # Confidence
-# --------------------------------------------------
 
 confidence = st.slider(
 
@@ -1650,9 +1450,7 @@ confidence = st.slider(
 )
 
 
-# ==================================================
-# NAVIGATION
-# ==================================================
+# Navigation
 
 st.divider()
 
