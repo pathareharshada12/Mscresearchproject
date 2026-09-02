@@ -1,13 +1,14 @@
-import streamlit as st
+
 import pandas as pd
 import xml.etree.ElementTree as ET
+import html
 import requests
 import re
 
 from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import quote_plus
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
 from sklearn.cluster import KMeans
 
 
@@ -198,8 +199,19 @@ def clean_html(text):
     if not isinstance(text, str):
         return ""
 
+    # Decode HTML entities such as &nbsp; and &amp;.
+    text = html.unescape(text)
+
+    # Remove HTML tags.
     text = re.sub(
         r"<[^>]+>",
+        " ",
+        text
+    )
+
+    # Remove any leftover HTML-style entity text.
+    text = re.sub(
+        r"&[a-zA-Z0-9#]+;",
         " ",
         text
     )
@@ -563,10 +575,31 @@ def cluster_signals(df, n_clusters=5):
         )
     )
 
+    extra_stop_words = [
+        "nbsp",
+        "amp",
+        "quot",
+        "apos",
+        "http",
+        "https",
+        "www",
+        "com",
+        "reddit",
+        "google",
+        "news",
+        "gen"
+    ]
+
     vectorizer = TfidfVectorizer(
-        stop_words="english",
+        stop_words=list(
+            set(
+                list(ENGLISH_STOP_WORDS)
+                + extra_stop_words
+            )
+        ),
         max_features=1200,
-        ngram_range=(1, 2)
+        ngram_range=(1, 2),
+        token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z]+\b"
     )
 
     matrix = vectorizer.fit_transform(
@@ -855,7 +888,7 @@ with tab1:
         )
 
         st.subheader(
-            "Live signal groups"
+            "Machine-detected theme groups"
         )
 
         summaries = []
@@ -992,6 +1025,10 @@ with tab1:
                 ascending=False
             ).head(
                 3
+            )
+
+            st.caption(
+                "Machine theme keywords · review the evidence before naming a signal"
             )
 
             st.caption(
