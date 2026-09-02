@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import feedparser
+import xml.etree.ElementTree as ET
 import requests
 import re
 
@@ -303,18 +303,54 @@ def fetch_google_news(query, limit=15):
         + "&hl=en-GB&gl=GB&ceid=GB:en"
     )
 
-    feed = feedparser.parse(
-        url
-    )
+    headers = {
+        "User-Agent":
+            "UAL-MSc-Human-AI-Foresight-Research/1.0"
+    }
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=10
+        )
+
+        if response.status_code != 200:
+            return []
+
+        root = ET.fromstring(
+            response.content
+        )
+
+    except Exception:
+        return []
 
     rows = []
 
-    for entry in feed.entries[:limit]:
+    for item in root.findall(
+        ".//item"
+    )[:limit]:
+
+        title = item.findtext(
+            "title",
+            default=""
+        )
+
+        description = item.findtext(
+            "description",
+            default=""
+        )
+
+        link = item.findtext(
+            "link",
+            default=""
+        )
 
         published = pd.to_datetime(
-            entry.get(
-                "published",
-                ""
+            item.findtext(
+                "pubDate",
+                default=""
             ),
             errors="coerce",
             utc=True
@@ -326,21 +362,12 @@ def fetch_google_news(query, limit=15):
                 "platform": "Google News",
                 "query": query,
                 "title": clean_html(
-                    entry.get(
-                        "title",
-                        ""
-                    )
+                    title
                 ),
                 "text": clean_html(
-                    entry.get(
-                        "summary",
-                        ""
-                    )
+                    description
                 ),
-                "url": entry.get(
-                    "link",
-                    ""
-                ),
+                "url": link,
                 "date": published
             }
         )
@@ -377,25 +404,59 @@ def fetch_reddit(query, limit=15):
         if response.status_code != 200:
             return []
 
-        feed = feedparser.parse(
-            response.text
+        root = ET.fromstring(
+            response.content
         )
 
     except Exception:
         return []
 
+    namespace = {
+        "atom": "http://www.w3.org/2005/Atom"
+    }
+
     rows = []
 
-    for entry in feed.entries[:limit]:
+    entries = root.findall(
+        "atom:entry",
+        namespace
+    )
+
+    for entry in entries[:limit]:
+
+        title = entry.findtext(
+            "atom:title",
+            default="",
+            namespaces=namespace
+        )
+
+        content = entry.findtext(
+            "atom:content",
+            default="",
+            namespaces=namespace
+        )
+
+        updated = entry.findtext(
+            "atom:updated",
+            default="",
+            namespaces=namespace
+        )
+
+        link_element = entry.find(
+            "atom:link",
+            namespace
+        )
+
+        link = ""
+
+        if link_element is not None:
+            link = link_element.attrib.get(
+                "href",
+                ""
+            )
 
         published = pd.to_datetime(
-            entry.get(
-                "updated",
-                entry.get(
-                    "published",
-                    ""
-                )
-            ),
+            updated,
             errors="coerce",
             utc=True
         )
@@ -406,21 +467,12 @@ def fetch_reddit(query, limit=15):
                 "platform": "Reddit",
                 "query": query,
                 "title": clean_html(
-                    entry.get(
-                        "title",
-                        ""
-                    )
+                    title
                 ),
                 "text": clean_html(
-                    entry.get(
-                        "summary",
-                        ""
-                    )
+                    content
                 ),
-                "url": entry.get(
-                    "link",
-                    ""
-                ),
+                "url": link,
                 "date": published
             }
         )
