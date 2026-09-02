@@ -1,7 +1,5 @@
 streamlit
 pandas
-streamlit
-pandas
 feedparser
 requests
 scikit-learn
