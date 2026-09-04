@@ -405,6 +405,31 @@ def clean_terms(summary):
 
 
 
+# AI trend framing
+
+def get_ai_trend(summary, terms, metric):
+    # Uses AI trend fields when present; otherwise safely frames the existing BERTopic output.
+    name = summary.get("ai_trend_name", "") if summary is not None else ""
+    desc = summary.get("ai_trend_summary", "") if summary is not None else ""
+    raw_score = summary.get("ai_confidence", None) if summary is not None else None
+    if not isinstance(name, str) or not name.strip():
+        name = " · ".join(terms[:3]) if terms else "Machine-detected candidate trend"
+    if not isinstance(desc, str) or not desc.strip():
+        desc = ("The AI has grouped the evidence below into this candidate trend area. "
+                "Review the evidence before deciding whether the interpretation is meaningful for UK sportswear.")
+    try:
+        score = float(raw_score) if pd.notna(raw_score) else None
+    except Exception:
+        score = None
+    if score is None:
+        total = float(metric.get("total_articles", 0) or 0)
+        sources = float(metric.get("unique_sources", 0) or 0)
+        growth = metric.get("growth_percent", 0)
+        growth = 0 if pd.isna(growth) else float(growth)
+        score = min(total/20,1)*35 + min(sources/8,1)*35 + max(0,min((growth+25)/100,1))*30
+    return name.strip(), desc.strip(), int(max(0,min(100,round(score))))
+
+
 # App introduction
 
 if not st.session_state.started:
@@ -1010,24 +1035,29 @@ st.caption(
 )
 
 
-# Signal evidence
+# AI-generated candidate trend
 
-st.title(
-    f"Possible Signal {current_index + 1}"
+ai_trend_name, ai_trend_summary, ai_confidence = get_ai_trend(
+    summary, terms, metric
 )
 
+st.title(f"AI Candidate Trend {current_index + 1}")
+st.subheader(ai_trend_name)
+st.write(ai_trend_summary)
 
 if terms:
+    st.caption("Machine-detected theme terms: " + " · ".join(terms))
 
-    st.write(
-
-        "**Machine-detected themes:** "
-
-        +
-        " · ".join(
-            terms
-        )
+score_col, note_col = st.columns([1, 3])
+with score_col:
+    st.metric("AI emergence indicator", f"{ai_confidence}/100")
+with note_col:
+    st.info(
+        "This is an evidence-strength indicator, not forecast accuracy. "
+        "The professional forecaster can accept, reject or reinterpret the AI trend."
     )
+
+st.markdown("### Evidence supporting this AI trend")
 
 
 # Evidence metrics
@@ -1544,6 +1574,15 @@ with next_col:
 
                 "topic_id":
                     topic_id,
+
+                "ai_trend_name":
+                    ai_trend_name,
+
+                "ai_trend_summary":
+                    ai_trend_summary,
+
+                "ai_emergence_indicator":
+                    ai_confidence,
 
                 "classification":
                     classification,
