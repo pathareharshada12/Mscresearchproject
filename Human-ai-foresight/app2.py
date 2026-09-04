@@ -55,6 +55,11 @@ EVIDENCE_FILE = find_file(
 )
 
 
+AI_TRENDS_FILE = find_file(
+    Path("data/processed/ai_candidate_trends.csv")
+)
+
+
 REVIEWS_FOLDER = (
     APP_DIR
     / "data"
@@ -73,7 +78,8 @@ required_files = {
     "Articles": ARTICLES_FILE,
     "Signal metrics": METRICS_FILE,
     "Topic summary": TOPIC_SUMMARY_FILE,
-    "Evidence digest": EVIDENCE_FILE
+    "Evidence digest": EVIDENCE_FILE,
+    "AI candidate trends": AI_TRENDS_FILE
 }
 
 
@@ -124,6 +130,10 @@ def load_data():
         EVIDENCE_FILE
     )
 
+    ai_trends = pd.read_csv(
+        AI_TRENDS_FILE
+    )
+
 
     articles["date"] = pd.to_datetime(
         articles["date"],
@@ -141,7 +151,8 @@ def load_data():
         articles,
         metrics,
         topic_summary,
-        evidence
+        evidence,
+        ai_trends
     )
 
 
@@ -149,7 +160,8 @@ def load_data():
     articles,
     metrics,
     topic_summary,
-    evidence
+    evidence,
+    ai_trends
 ) = load_data()
 
 
@@ -1041,26 +1053,67 @@ ai_trend_name, ai_trend_summary, ai_confidence = get_ai_trend(
     summary, terms, metric
 )
 
-st.title(f"AI Candidate Trend {current_index + 1}")
-st.subheader(ai_trend_name)
-st.write(ai_trend_summary)
+ai_trend = get_ai_trend(topic_id)
 
-if terms:
-    st.caption("Machine-detected theme terms: " + " · ".join(terms))
+st.title(
+    f"AI Candidate Trend {current_index + 1}"
+)
 
-score_col, note_col = st.columns([1, 3])
-with score_col:
-    st.metric("AI emergence indicator", f"{ai_confidence}/100")
-with note_col:
-    st.info(
-        "This is an evidence-strength indicator, not forecast accuracy. "
-        "The professional forecaster can accept, reject or reinterpret the AI trend."
+if ai_trend is None:
+    st.error("No AI candidate interpretation was generated for this topic.")
+    st.stop()
+
+ai_status = safe_text(ai_trend.get("ai_status"), "UNASSESSED")
+ai_name = safe_text(ai_trend.get("ai_trend_name"), f"Candidate {current_index + 1}")
+ai_hypothesis = safe_text(ai_trend.get("ai_hypothesis"))
+ai_rationale = safe_text(ai_trend.get("ai_rationale"))
+ai_limitations = safe_text(ai_trend.get("limitations"))
+ai_score = ai_trend.get("emergence_score")
+
+if ai_status == "TREND":
+    st.subheader(ai_name)
+    st.markdown("**AI hypothesis**")
+    st.write(ai_hypothesis)
+
+    score_col, status_col = st.columns(2)
+    score_col.metric(
+        "AI emergence score",
+        f"{int(ai_score)}/100" if pd.notna(ai_score) else "N/A"
+    )
+    status_col.metric("AI assessment", ai_status)
+
+    st.caption(
+        "Emergence score estimates the strength of an emerging pattern in the available evidence. "
+        "It is not forecast accuracy."
     )
 
-st.markdown("### Evidence supporting this AI trend")
+    if ai_rationale:
+        st.markdown("**Why the AI detected this trend**")
+        st.write(ai_rationale)
 
+    if ai_limitations:
+        st.markdown("**Limitations / counter-evidence**")
+        st.write(ai_limitations)
 
-# Evidence metrics
+else:
+    st.warning(f"AI assessment: {ai_status}")
+    st.subheader(ai_name)
+    if ai_hypothesis:
+        st.write(ai_hypothesis)
+    if ai_rationale:
+        st.markdown("**Why the AI did not validate this as an emerging trend**")
+        st.write(ai_rationale)
+    if ai_limitations:
+        st.markdown("**Limitations**")
+        st.write(ai_limitations)
+
+if terms:
+    with st.expander("View underlying BERTopic terms"):
+        st.write(" · ".join(terms))
+
+st.subheader(
+    "Evidence supporting this AI assessment"
+)
 
 st.subheader(
     "Evidence snapshot"
