@@ -1,90 +1,203 @@
 
 """
-Generate data/processed/ai_candidate_trends.csv
+Evidence-grounded AI trend generator for the Human–AI Foresight thesis prototype.
 
-Purpose:
-Turn BERTopic clusters into candidate trend propositions BEFORE human judgement.
+What this script does
+---------------------
+1. Loads BERTopic clusters + representative evidence.
+2. Sends each cluster to an LLM for a conservative assessment.
+3. The LLM MUST first classify the cluster as:
+   TREND / CONTEXT / ESTABLISHED / NOISE
+4. Only TREND clusters receive:
+   - a distinct trend name
+   - an evidence-grounded hypothesis
+   - a rationale
+   - UK sportswear relevance
+   - limitations / counter-evidence
+5. Emergence score remains calculated from observable evidence metrics,
+   not invented by the LLM.
+6. Saves:
+   data/processed/ai_candidate_trends.csv
 
-This baseline is deliberately conservative:
-- It can label a cluster TREND, CONTEXT, ESTABLISHED, or NOISE.
-- It refuses to call generic market-size / forecast-report clusters "trends".
-- Emergence is only scored for TREND clusters.
-- Evidence remains traceable through cluster_evidence_digest.csv.
+Important methodological rule
+-----------------------------
+The LLM is not allowed to assume every BERTopic cluster is a trend.
+Market-size reports, trend reports, listicles, PR and promotional content
+cannot alone establish an emerging trend.
 
-Run from the project root:
-    python generate_ai_candidate_trends.py
+API
+---
+This version uses Google's current `google-genai` Python package.
+
+Install:
+    python -m pip install google-genai pandas numpy
+
+Set your API key in PowerShell for the current terminal:
+    $env:GEMINI_API_KEY="YOUR_KEY"
+
+Then run:
+    python Human-ai-foresight/ai_trend_generator_llm.py
 """
+
+from __future__ import annotations
+
 from pathlib import Path
-import pandas as pd
-import numpy as np
+import json
+import os
 import re
+import time
 
-ROOT = Path(__file__).resolve().parent
-DATA = ROOT / "data" / "processed"
+import numpy as np
+import pandas as pd
+from google import genai
+from google.genai import types
 
-METRICS = DATA / "signal_metrics.csv"
-SUMMARY = DATA / "topic_summary.csv"
-EVIDENCE = DATA / "cluster_evidence_digest.csv"
-OUT = DATA / "ai_candidate_trends.csv"
 
-metrics = pd.read_csv(METRICS)
-summary = pd.read_csv(SUMMARY)
-evidence = pd.read_csv(EVIDENCE)
+# ---------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------
 
-def txt(v):
-    return "" if pd.isna(v) else str(v).strip()
+SCRIPT_DIR = Path(__file__).resolve().parent
+DATA = SCRIPT_DIR / "data" / "processed"
 
-def topic_blob(topic_id):
-    s = summary[summary["Topic"].astype(int) == int(topic_id)]
-    e = evidence[evidence["topic_id"].astype(int) == int(topic_id)]
-    bits = []
-    if not s.empty:
-        for c in ["Name", "Representation"]:
-            if c in s.columns:
-                bits.append(txt(s.iloc[0].get(c)))
-    for c in ["title", "available_text", "source"]:
-        if c in e.columns:
-            bits.extend(e[c].fillna("").astype(str).tolist())
-    return " ".join(bits).lower(), e
+METRICS_FILE = DATA / "signal_metrics.csv"
+SUMMARY_FILE = DATA / "topic_summary.csv"
+EVIDENCE_FILE = DATA / "cluster_evidence_digest.csv"
+ARTICLES_FILE = DATA / "articles_with_topics.csv"
+OUTPUT_FILE = DATA / "ai_candidate_trends.csv"
 
-def has_any(blob, terms):
-    return any(t in blob for t in terms)
 
-CONTEXT = [
-    "market size", "market share", "market insights", "global market",
-    "forecast to 20", "cagr", "industry analysis", "market outlook"
-]
-PROMO = [
-    "best activewear", "best brands", "top picks", "need now",
-    "shop", "sale", "must-have"
-]
-COMMUNITY = ["community", "running club", "run club", "social fitness", "collective", "participation"]
-WELLNESS = ["wellness", "wellbeing", "recovery", "mental health", "holistic", "walking"]
-RETAIL_TECH = ["ar mirror", "augmented reality", "personalisation", "ecommerce", "digital retail", "shopping experience"]
-CIRCULAR = ["secondhand", "resale", "repair", "circular", "recycled", "reuse"]
-IDENTITY = ["identity", "lifestyle", "fashion", "streetwear", "culture", "everyday"]
-INNOVATION = ["innovation", "material", "technology", "performance clothing", "footwear technology"]
+# ---------------------------------------------------------------------
+# Model configuration
+# ---------------------------------------------------------------------
 
-def propose_name(blob):
-    # More specific combinations first.
-    if has_any(blob, COMMUNITY) and has_any(blob, WELLNESS):
-        return "Collective Wellness", "Fitness and wellbeing appear to be becoming more socially embedded, with participation increasingly organised around community, belonging and shared experience."
-    if has_any(blob, CIRCULAR):
-        return "Circular Sportswear Behaviours", "Evidence suggests growing visibility of resale, repair and secondhand behaviours around sportswear, extending product value beyond first purchase."
-    if has_any(blob, RETAIL_TECH):
-        return "Augmented Sportswear Retail", "Sportswear retail appears to be integrating digital and interactive technologies into product discovery and the physical shopping experience."
-    if has_any(blob, WELLNESS):
-        return "Everyday Wellness Performance", "Sportswear demand appears to be broadening beyond high-intensity performance toward everyday wellbeing, recovery and lower-pressure movement."
-    if has_any(blob, COMMUNITY):
-        return "Community-Led Performance", "Participation in sport and fitness appears increasingly connected to community, social identity and collective experiences rather than individual performance alone."
-    if has_any(blob, IDENTITY):
-        return "Sportswear as Everyday Identity", "Sportswear appears increasingly embedded in everyday lifestyle and identity, blurring boundaries between performance apparel, fashion and cultural expression."
-    if has_any(blob, INNOVATION):
-        return "Adaptive Performance Innovation", "Product and material innovation appears to be reshaping expectations of performance, functionality and the role of technology in sportswear."
-    return "Unresolved Pattern", "The cluster contains related material, but the available evidence does not yet support a sufficiently specific emerging-trend proposition."
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+API_KEY = os.getenv("GEMINI_API_KEY")
 
-def emergence(metric, e):
-    # Transparent, bounded evidence-strength score.
+if not API_KEY:
+    raise RuntimeError(
+        "GEMINI_API_KEY is not set.\n"
+        'PowerShell example:\n'
+        '$env:GEMINI_API_KEY="YOUR_KEY"'
+    )
+
+client = genai.Client(api_key=API_KEY)
+
+
+# ---------------------------------------------------------------------
+# Load project data
+# ---------------------------------------------------------------------
+
+for file in [METRICS_FILE, SUMMARY_FILE, EVIDENCE_FILE]:
+    if not file.exists():
+        raise FileNotFoundError(f"Missing required file: {file}")
+
+metrics = pd.read_csv(METRICS_FILE)
+topic_summary = pd.read_csv(SUMMARY_FILE)
+evidence = pd.read_csv(EVIDENCE_FILE)
+
+articles = (
+    pd.read_csv(ARTICLES_FILE)
+    if ARTICLES_FILE.exists()
+    else pd.DataFrame()
+)
+
+
+# ---------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------
+
+def clean(value) -> str:
+    if pd.isna(value):
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def get_topic_summary(topic_id: int) -> dict:
+    match = topic_summary[
+        topic_summary["Topic"].astype(int) == int(topic_id)
+    ]
+
+    if match.empty:
+        return {}
+
+    row = match.iloc[0]
+
+    return {
+        "representation": clean(row.get("Representation", "")),
+        "topic_name": clean(row.get("Name", "")),
+    }
+
+
+def get_topic_evidence(topic_id: int) -> pd.DataFrame:
+    subset = evidence[
+        evidence["topic_id"].astype(int) == int(topic_id)
+    ].copy()
+
+    if "evidence_number" in subset.columns:
+        subset = subset.sort_values("evidence_number")
+
+    return subset
+
+
+def build_evidence_text(topic_id: int, max_items: int = 8) -> str:
+    subset = get_topic_evidence(topic_id).head(max_items)
+
+    if subset.empty:
+        return "No representative evidence available."
+
+    blocks = []
+
+    for i, (_, row) in enumerate(subset.iterrows(), start=1):
+        title = clean(row.get("title", "Untitled"))
+        source = clean(row.get("source", "Unknown source"))
+        date = clean(row.get("date", ""))
+        body = clean(
+            row.get(
+                "available_text",
+                row.get("text", "")
+            )
+        )
+        url = clean(row.get("url", ""))
+
+        if len(body) > 900:
+            body = body[:900].rsplit(" ", 1)[0] + "..."
+
+        block = (
+            f"EVIDENCE {i}\n"
+            f"Title: {title}\n"
+            f"Source: {source}\n"
+            f"Date: {date}\n"
+            f"Excerpt: {body or '[No substantive excerpt available]'}\n"
+            f"URL: {url or '[No URL]'}"
+        )
+
+        blocks.append(block)
+
+    return "\n\n".join(blocks)
+
+
+def build_metric_context(metric: pd.Series) -> dict:
+    return {
+        "total_articles": int(metric.get("total_articles", 0) or 0),
+        "unique_sources": int(metric.get("unique_sources", 0) or 0),
+        "active_months": int(metric.get("active_months", 0) or 0),
+        "growth_percent": (
+            None
+            if pd.isna(metric.get("growth_percent"))
+            else float(metric.get("growth_percent"))
+        ),
+    }
+
+
+def emergence_score(metric: pd.Series, topic_evidence: pd.DataFrame) -> int:
+    """
+    Transparent evidence-strength score.
+
+    This score is only used when the LLM classifies the cluster as TREND.
+    It is NOT forecast accuracy and is NOT generated by the LLM.
+    """
+
     total = float(metric.get("total_articles", 0) or 0)
     sources = float(metric.get("unique_sources", 0) or 0)
     months = float(metric.get("active_months", 0) or 0)
@@ -97,73 +210,314 @@ def emergence(metric, e):
     if pd.isna(growth):
         momentum = 40
     else:
-        # 0% growth = 50; +100% = 100; -100% = 0.
-        momentum = float(np.clip(50 + float(growth) / 2, 0, 100))
+        momentum = float(
+            np.clip(
+                50 + float(growth) / 2,
+                0,
+                100
+            )
+        )
 
-    # Evidence digest source spread adds corroboration.
-    corroboration = min(100, e["source"].nunique() / 5 * 100) if "source" in e.columns and len(e) else 0
+    if (
+        not topic_evidence.empty
+        and "source" in topic_evidence.columns
+    ):
+        corroboration = min(
+            100,
+            topic_evidence["source"].nunique() / 5 * 100
+        )
+    else:
+        corroboration = 0
 
-    return round(
-        0.25 * volume +
-        0.25 * diversity +
-        0.20 * persistence +
-        0.20 * momentum +
-        0.10 * corroboration
+    score = (
+        0.25 * volume
+        + 0.25 * diversity
+        + 0.20 * persistence
+        + 0.20 * momentum
+        + 0.10 * corroboration
     )
 
+    return int(round(score))
+
+
+def build_prompt(
+    topic_id: int,
+    topic_meta: dict,
+    metric_context: dict,
+    evidence_text: str,
+) -> str:
+
+    return f"""
+You are evaluating one computationally detected evidence cluster for an MSc research prototype on Human–AI foresight in the UK sportswear market.
+
+Your task is NOT to force this cluster into a trend.
+
+You must first decide whether the supplied evidence supports one of four classifications:
+
+TREND
+A distinct emerging direction of change supported by multiple pieces of evidence.
+
+CONTEXT
+Useful background or market information, but not itself an emerging foresight signal.
+
+ESTABLISHED
+A real pattern, but already sufficiently established that it should not be framed as an emerging trend.
+
+NOISE
+The cluster is incoherent, commercially biased, too weak, too generic, or the articles do not belong together.
+
+STRICT EVIDENCE RULES
+
+1. Do not assume BERTopic similarity means a trend exists.
+2. Do not treat market-size reports, forecasts, "trends" articles, listicles, PR or promotional articles as sufficient evidence by themselves.
+3. Do not invent consumer behaviour, causes, statistics, motivations or future outcomes.
+4. Use ONLY the evidence supplied below.
+5. A TREND must describe an observable direction of change, not just a topic such as "market size", "innovation", "wellness" or "fashion".
+6. If evidence is mixed, say so.
+7. Distinguish what is directly observed from what is interpretation.
+8. The trend name must be specific to this cluster and should not be reused generically across unrelated clusters.
+9. Keep the language appropriate for a professional foresight practitioner.
+10. This is UK sportswear foresight. Explain UK sportswear relevance only when supported.
+
+BERTopic metadata
+-----------------
+Topic ID: {topic_id}
+Topic representation: {topic_meta.get("representation", "")}
+Topic name: {topic_meta.get("topic_name", "")}
+
+Computational evidence metrics
+------------------------------
+Articles in cluster: {metric_context["total_articles"]}
+Unique sources: {metric_context["unique_sources"]}
+Active months: {metric_context["active_months"]}
+Recent coverage change: {metric_context["growth_percent"]}
+
+Representative evidence
+-----------------------
+{evidence_text}
+
+Return ONLY valid JSON using exactly this structure:
+
+{{
+  "ai_status": "TREND | CONTEXT | ESTABLISHED | NOISE",
+  "ai_trend_name": "short professional name",
+  "ai_hypothesis": "2-4 sentence evidence-grounded interpretation of what is or is not changing",
+  "observable_change": "the change directly supported by the evidence, or empty string if none",
+  "ai_rationale": "why this classification was chosen",
+  "uk_sportswear_relevance": "specific relevance supported by evidence, or empty string if not established",
+  "limitations": "weaknesses, contradictions, circular evidence, source bias or missing evidence",
+  "supporting_evidence_numbers": [1, 2],
+  "counter_evidence_numbers": []
+}}
+
+If this is CONTEXT, ESTABLISHED or NOISE, do not manufacture a trend proposition. The name should clearly reflect the assessment, for example "Market Context — Not an Emerging Trend".
+""".strip()
+
+
+def parse_json_response(text: str) -> dict:
+    """
+    Gemini is requested to return JSON, but this adds a defensive parser.
+    """
+    raw = text.strip()
+
+    # Remove fenced JSON if returned despite instructions.
+    raw = re.sub(
+        r"^```(?:json)?\s*",
+        "",
+        raw,
+        flags=re.I
+    )
+    raw = re.sub(
+        r"\s*```$",
+        "",
+        raw
+    )
+
+    return json.loads(raw)
+
+
+def validate_result(result: dict) -> dict:
+    allowed = {
+        "TREND",
+        "CONTEXT",
+        "ESTABLISHED",
+        "NOISE"
+    }
+
+    status = clean(result.get("ai_status", "")).upper()
+
+    if status not in allowed:
+        raise ValueError(
+            f"Unexpected ai_status: {status}"
+        )
+
+    result["ai_status"] = status
+
+    for field in [
+        "ai_trend_name",
+        "ai_hypothesis",
+        "observable_change",
+        "ai_rationale",
+        "uk_sportswear_relevance",
+        "limitations",
+    ]:
+        result[field] = clean(
+            result.get(field, "")
+        )
+
+    for field in [
+        "supporting_evidence_numbers",
+        "counter_evidence_numbers",
+    ]:
+        value = result.get(field, [])
+        if not isinstance(value, list):
+            value = []
+        result[field] = value
+
+    return result
+
+
+# ---------------------------------------------------------------------
+# Generate assessments
+# ---------------------------------------------------------------------
+
 rows = []
-for _, metric in metrics.iterrows():
-    tid = int(metric["topic_id"])
-    blob, ev = topic_blob(tid)
 
-    # First classify whether this deserves trend status at all.
-    context_hits = sum(blob.count(t) for t in CONTEXT)
-    promo_hits = sum(blob.count(t) for t in PROMO)
-    behavioural = any(has_any(blob, group) for group in [COMMUNITY, WELLNESS, RETAIL_TECH, CIRCULAR, IDENTITY, INNOVATION])
+for _, metric in metrics.sort_values("topic_id").iterrows():
 
-    if context_hits >= 2 and not behavioural:
-        status = "CONTEXT"
-        name = "Market Context — Not an Emerging Trend"
-        hypothesis = "This cluster is dominated by market-size, market-outlook or industry-report material rather than evidence of a distinct emerging change."
-        rationale = "The material may help frame the commercial environment, but treating forecasts and market-size reporting as weak signals would create circular evidence."
-        limitations = "Use as background context only. Do not include in the emerging-trend forecast unless independent behavioural, cultural, technological or commercial evidence is added."
-        score = np.nan
-    elif promo_hits >= 2 and not behavioural:
-        status = "NOISE"
-        name = "Promotional / Editorial Cluster"
-        hypothesis = "The cluster contains commercially framed or listicle-style material and does not currently support an emerging foresight proposition."
-        rationale = "Similarity between promotional articles is not sufficient evidence of consumer or market change."
-        limitations = "Requires independent evidence before reconsideration."
-        score = np.nan
+    topic_id = int(metric["topic_id"])
+
+    topic_meta = get_topic_summary(topic_id)
+    topic_evidence = get_topic_evidence(topic_id)
+    metric_context = build_metric_context(metric)
+    evidence_text = build_evidence_text(topic_id)
+
+    prompt = build_prompt(
+        topic_id=topic_id,
+        topic_meta=topic_meta,
+        metric_context=metric_context,
+        evidence_text=evidence_text,
+    )
+
+    print(
+        f"\nAssessing topic {topic_id}..."
+    )
+
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.15,
+                response_mime_type="application/json",
+            ),
+        )
+
+        result = parse_json_response(
+            response.text
+        )
+        result = validate_result(
+            result
+        )
+
+    except Exception as exc:
+        print(
+            f"Topic {topic_id} failed: {exc}"
+        )
+
+        result = {
+            "ai_status": "NOISE",
+            "ai_trend_name": "AI assessment failed — manual review required",
+            "ai_hypothesis": "",
+            "observable_change": "",
+            "ai_rationale": f"Generation error: {exc}",
+            "uk_sportswear_relevance": "",
+            "limitations": "The AI assessment could not be completed.",
+            "supporting_evidence_numbers": [],
+            "counter_evidence_numbers": [],
+        }
+
+    if result["ai_status"] == "TREND":
+        score = emergence_score(
+            metric,
+            topic_evidence
+        )
     else:
-        name, hypothesis = propose_name(blob)
-        if name == "Unresolved Pattern":
-            status = "NOISE"
-            rationale = "BERTopic found semantic similarity, but the evidence does not yet express a clear direction of change."
-            limitations = "The human reviewer may still identify a meaningful interpretation, but the AI should not manufacture a trend name from weak evidence."
-            score = np.nan
-        else:
-            status = "TREND"
-            score = emergence(metric, ev)
-            rationale = (
-                f"The cluster contains {int(metric.get('total_articles', 0))} items across "
-                f"{int(metric.get('unique_sources', 0))} sources and shows recurring evidence related to this proposition."
-            )
-            limitations = "This is a candidate interpretation generated from the available corpus. Professional review is required to test novelty, context, strategic relevance and whether the evidence genuinely belongs together."
+        score = np.nan
 
-    rows.append({
-        "topic_id": tid,
-        "ai_status": status,
-        "ai_trend_name": name,
-        "ai_hypothesis": hypothesis,
-        "ai_rationale": rationale,
-        "emergence_score": score,
-        "limitations": limitations
-    })
+    rows.append(
+        {
+            "topic_id": topic_id,
+            "ai_status": result["ai_status"],
+            "ai_trend_name": result["ai_trend_name"],
+            "ai_hypothesis": result["ai_hypothesis"],
+            "observable_change": result["observable_change"],
+            "ai_rationale": result["ai_rationale"],
+            "uk_sportswear_relevance": result["uk_sportswear_relevance"],
+            "emergence_score": score,
+            "limitations": result["limitations"],
+            "supporting_evidence_numbers": " | ".join(
+                map(
+                    str,
+                    result[
+                        "supporting_evidence_numbers"
+                    ],
+                )
+            ),
+            "counter_evidence_numbers": " | ".join(
+                map(
+                    str,
+                    result[
+                        "counter_evidence_numbers"
+                    ],
+                )
+            ),
+            "model": MODEL_NAME,
+        }
+    )
 
-out = pd.DataFrame(rows).sort_values("topic_id")
-OUT.parent.mkdir(parents=True, exist_ok=True)
-out.to_csv(OUT, index=False, encoding="utf-8-sig")
+    print(
+        f"  {result['ai_status']}: "
+        f"{result['ai_trend_name']}"
+    )
 
-print(f"Saved {len(out)} AI assessments to: {OUT}")
-print(out[["topic_id", "ai_status", "ai_trend_name", "emergence_score"]].to_string(index=False))
+    # Gentle pacing for API reliability.
+    time.sleep(0.4)
+
+
+# ---------------------------------------------------------------------
+# Save output
+# ---------------------------------------------------------------------
+
+output = pd.DataFrame(rows)
+OUTPUT_FILE.parent.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+output.to_csv(
+    OUTPUT_FILE,
+    index=False,
+    encoding="utf-8-sig"
+)
+
+print(
+    f"\nSaved {len(output)} AI assessments to:"
+)
+print(
+    OUTPUT_FILE
+)
+
+print(
+    "\n"
+    + output[
+        [
+            "topic_id",
+            "ai_status",
+            "ai_trend_name",
+            "emergence_score",
+        ]
+    ].to_string(
+        index=False
+    )
+)
