@@ -53,9 +53,8 @@ from google import genai
 from google.genai import types
 
 
-# ---------------------------------------------------------------------
 # Paths
-# ---------------------------------------------------------------------
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DATA = SCRIPT_DIR / "data" / "processed"
@@ -67,9 +66,8 @@ ARTICLES_FILE = DATA / "articles_with_topics.csv"
 OUTPUT_FILE = DATA / "ai_candidate_trends.csv"
 
 
-# ---------------------------------------------------------------------
 # Model configuration
-# ---------------------------------------------------------------------
+
 
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 API_KEY = os.getenv("GEMINI_API_KEY")
@@ -84,9 +82,8 @@ if not API_KEY:
 client = genai.Client(api_key=API_KEY)
 
 
-# ---------------------------------------------------------------------
 # Load project data
-# ---------------------------------------------------------------------
+
 
 for file in [METRICS_FILE, SUMMARY_FILE, EVIDENCE_FILE]:
     if not file.exists():
@@ -103,9 +100,8 @@ articles = (
 )
 
 
-# ---------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------
+
 
 def clean(value) -> str:
     if pd.isna(value):
@@ -377,9 +373,9 @@ def validate_result(result: dict) -> dict:
     return result
 
 
-# ---------------------------------------------------------------------
+# 
 # Generate assessments
-# ---------------------------------------------------------------------
+# 
 
 rows = []
 
@@ -485,9 +481,9 @@ for _, metric in metrics.sort_values("topic_id").iterrows():
     time.sleep(0.4)
 
 
-# ---------------------------------------------------------------------
+
 # Save output
-# ---------------------------------------------------------------------
+
 
 output = pd.DataFrame(rows)
 OUTPUT_FILE.parent.mkdir(

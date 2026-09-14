@@ -33,12 +33,7 @@ The pipeline asks:
 
 Only validated observations proceed to clustering.
 
-Install:
-    python -m pip install google-genai pandas
 
-PowerShell:
-    $env:GEMINI_API_KEY="YOUR_KEY"
-    python Human-ai-foresight/signal_builder.py
 """
 
 from __future__ import annotations
@@ -56,9 +51,7 @@ from google import genai
 from google.genai import types
 
 
-# -------------------------------------------------------------------
-# PATHS
-# -------------------------------------------------------------------
+
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data" / "processed"
@@ -87,9 +80,6 @@ if not INPUT.exists():
 client = genai.Client(api_key=API_KEY)
 
 
-# -------------------------------------------------------------------
-# CONFIG
-# -------------------------------------------------------------------
 
 EVIDENCE_FAMILIES = {
     "COMMUNITY",
@@ -360,9 +350,8 @@ def validate_ai_result(result: dict) -> dict:
     return result
 
 
-# -------------------------------------------------------------------
 # LOAD
-# -------------------------------------------------------------------
+
 
 df = pd.read_csv(INPUT)
 
@@ -375,9 +364,9 @@ if missing:
     )
 
 
-# -------------------------------------------------------------------
+
 # PROCESS
-# -------------------------------------------------------------------
+
 
 records = []
 
@@ -472,10 +461,6 @@ for idx, row in df.iterrows():
 audit = pd.DataFrame(records)
 
 
-# -------------------------------------------------------------------
-# FINAL HARD GATE
-# -------------------------------------------------------------------
-
 # A row enters the valid signal pool only when:
 # - AI extracted a valid signal
 # - observation exists
@@ -495,9 +480,8 @@ validated = audit[valid_mask].copy()
 rejections = audit[~valid_mask].copy()
 
 
-# -------------------------------------------------------------------
-# SAVE
-# -------------------------------------------------------------------
+# save
+
 
 DATA.mkdir(parents=True, exist_ok=True)
 
@@ -520,9 +504,7 @@ rejections.to_csv(
 )
 
 
-# -------------------------------------------------------------------
-# REPORT
-# -------------------------------------------------------------------
+# report
 
 print("\n" + "=" * 70)
 print("SIGNAL BUILDER COMPLETE")
